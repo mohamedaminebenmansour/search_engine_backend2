@@ -1,75 +1,55 @@
-import logging
-from transformers import pipeline
+import requests
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Initialize the LLM (e.g., Mistral or LLaMA2)
-try:
-    llm = pipeline("text-generation", model="mistralai/Mixtral-8x7B-Instruct-v0.1")
-except Exception as e:
-    logger.error(f"Failed to initialize LLM: {str(e)}", exc_info=True)
-    llm = None
-
-def generate_answer_with_llm(documents, query, history=None, model="mistral", domain="general"):
+def generate_answer_with_llm(contexts, query, history=None, model="llama2"):
     """
-    Generate an answer using the specified LLM model, incorporating documents, query, history, and domain.
+    Generate a response using a specified LLM model via Ollama.
     
     Args:
-        documents (list): List of dictionaries with 'text', 'url', and 'score' keys.
-        query (str): The user's query.
-        history (list): List of previous conversation messages.
-        model (str): The LLM model to use (e.g., 'mistral', 'llama2').
-        domain (str): The domain to focus the response on (e.g., 'sport').
+        contexts: List of context documents.
+        query: User query string.
+        history: Conversation history (optional).
+        model: Name of the model to use (e.g., 'llama2', 'gemma', 'llama3', 'mistral').
     
     Returns:
-        str: The generated answer.
+        Generated response or error message.
     """
-    if llm is None:
-        logger.error("LLM model failed to initialize.")
-        return "Erreur : impossible de générer une réponse en raison d'un problème avec le modèle."
+    prompt = (
+        "Tu es un assistant intelligent, amical, et très performant. "
+        "Tu comprends parfaitement les fautes d'orthographe, de grammaire, les abréviations, et même les questions mal formulées. "
+        "Ta mission est de répondre naturellement, comme un humain, en t'adaptant à la situation. "
+        "Si la question est simple (comme 'hello'), réponds simplement ('Salut !'), pas avec un long paragraphe. "
+        "Si le contexte contient de l'information utile, utilise-le pour améliorer la réponse. "
+        "Sinon, fais de ton mieux avec ce que tu comprends.\n\n"
+    )
 
-    # Prepare context from documents
-    context = ""
-    for doc in documents:
-        text = doc.get("text", "")
-        if text:
-            context += f"- {text}\n"
-
-    # Prepare conversation history
-    history_text = ""
     if history:
-        for msg in history:
-            role = "User" if msg.get("role") == "user" else "Assistant"
-            content = msg.get("content", msg.get("user", msg.get("bot", "")))
-            history_text += f"{role}: {content}\n"
+        prompt += "Historique de la conversation :\n"
+        for turn in history:
+            prompt += f"- Utilisateur : {turn['user']}\n"
+            prompt += f"- Assistant : {turn['bot']}\n"
 
-    # Construct the prompt, incorporating the domain
-    domain_prompt = f"Focus on the '{domain}' domain when answering." if domain != "general" else ""
-    prompt = f"""
-{domain_prompt}
-Based on the following context and conversation history, provide a concise and accurate answer to the query: "{query}"
+    prompt += f"\nQuestion actuelle : {query}\n"
 
-Context:
-{context}
+    if contexts:
+        prompt += "\nContexte disponible :\n"
+        for i, doc in enumerate(contexts[:5], 1):
+            prompt += f"[{i}] {doc['text']}\n"
 
-Conversation History:
-{history_text}
-
-Answer:
-"""
-    logger.info(f"Generating answer with prompt: {prompt[:200]}...")  # Log first 200 chars for brevity
+    prompt += "\nRéponds maintenant de façon naturelle et utile :"
 
     try:
-        # Generate response using the LLM
-        response = llm(prompt, max_length=200, num_return_sequences=1, do_sample=True, temperature=0.7)
-        answer = response[0]["generated_text"].strip()
-        # Extract the answer part after "Answer:" if present
-        if "Answer:" in answer:
-            answer = answer.split("Answer:")[-1].strip()
-        logger.info(f"Generated answer: {answer[:100]}...")  # Log first 100 chars
-        return answer
-    except Exception as e:
-        logger.error(f"Error generating answer with LLM: {str(e)}", exc_info=True)
-        return f"Erreur : impossible de générer une réponse ({str(e)})."
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": model,  # Use the specified model
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=60
+        )
+        response.raise_for_status()
+        return response.json().get("response", "").strip()
+
+    except requests.exceptions.RequestException as e:
+        print(f"Erreur LLM (Ollama, modèle {model}): {e}")
+        return "Je suis désolé, je n’ai pas pu générer de réponse pour le moment."
